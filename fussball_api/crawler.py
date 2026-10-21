@@ -35,6 +35,25 @@ logger = logging.getLogger(__name__)
 
 FUSSBALL_DE_BASE_URL = "https://www.fussball.de"
 
+# fussball.de inserts zero-width spaces (as "&#8203;") as line break hints, e.g. after
+# "/" in "1. FC Burg/SG Marßel". They are invisible but end up in names and break matching.
+_ZERO_WIDTH_CHARS = re.compile("[\u200b\u200c\u200d\u2060\ufeff]")
+
+
+def _make_soup(html: Optional[str]) -> BeautifulSoup:
+    """
+    Parses HTML from fussball.de and removes zero-width characters from all texts.
+
+    The characters are removed after parsing, since they are encoded as HTML entities.
+
+    :param html: The raw HTML content.
+    :return: The parsed document.
+    """
+    soup = BeautifulSoup(html or "", "lxml")
+    for text in soup.find_all(string=_ZERO_WIDTH_CHARS):
+        text.replace_with(_ZERO_WIDTH_CHARS.sub("", text))
+    return soup
+
 
 def normalize_logo_url(url: str) -> str:
     """
@@ -253,7 +272,7 @@ async def _get_games(url: str, cache_key: str) -> List[Game]:
         return []
 
     logger.debug(f"Parsing new HTML content for games: {cache_key}")
-    soup = BeautifulSoup(html_content, "lxml")
+    soup = _make_soup(html_content)
     game_rows = soup.find_all("tr")
 
     games = []
@@ -354,7 +373,7 @@ async def _get_games(url: str, cache_key: str) -> List[Game]:
 
                 details_response = await asyncio.to_thread(fetch_url, game_details_url)
                 if details_response and details_response.status_code == 200:
-                    details_soup = BeautifulSoup(details_response.text, "lxml")
+                    details_soup = _make_soup(details_response.text)
                     stage_section = details_soup.find("section", id="stage")
                     if stage_section:
                         location_link = stage_section.find("a", class_="location")
@@ -486,7 +505,7 @@ async def get_club_teams(club_id: str) -> List[Team]:
     # New data received, parse it
     logger.debug(f"Parsing new HTML content for club_id: {club_id}")
     html_content = response.text or ""
-    soup = BeautifulSoup(html_content, "lxml")
+    soup = _make_soup(html_content)
     teams = []
     team_items = soup.find_all("div", class_="item")
 
@@ -536,7 +555,7 @@ async def get_team_table(team_id: str) -> Optional[Table]:
         return None
 
     logger.debug(f"Parsing new HTML content for team table: {team_id}")
-    soup = BeautifulSoup(html_content, "lxml")
+    soup = _make_soup(html_content)
     table_rows = soup.find_all("tr")
 
     table_entries = []
@@ -606,7 +625,7 @@ async def search_clubs(query: str) -> List[ClubSearchResult]:
         return []
 
     html_content = response.text or ""
-    soup = BeautifulSoup(html_content, "lxml")
+    soup = _make_soup(html_content)
 
     club_list_div = soup.find("div", id="clublist")
     if not club_list_div:
@@ -662,7 +681,7 @@ async def _get_player_name_from_profile(profile_url: str) -> Optional[str]:
         return None
 
     try:
-        soup = BeautifulSoup(response.text, "lxml")
+        soup = _make_soup(response.text)
         tag = soup.find("p", class_="profile-name")
         if tag:
             return tag.get_text(strip=True)
@@ -731,7 +750,7 @@ async def _get_match_course(game_id: str) -> List[MatchEvent]:
         return []
 
     html_content = response.text or ""
-    soup = BeautifulSoup(html_content, "lxml")
+    soup = _make_soup(html_content)
 
     events: List[MatchEvent] = []
     last_section_end: Optional[str] = None
@@ -841,7 +860,7 @@ async def get_game_by_id(game_id: str) -> Optional[Game]:
         logger.error(f"Failed to fetch game details for game_id={game_id}")
         return None
 
-    details_soup = BeautifulSoup(details_response.text or "", "lxml")
+    details_soup = _make_soup(details_response.text or "")
 
     stage_section = details_soup.find("section", id="stage")
     if not stage_section:
@@ -969,7 +988,7 @@ async def get_game_lineup(game_id: str) -> Optional[Lineup]:
         logger.warning(f"Failed to fetch lineup for game {game_id}")
         return None
 
-    soup = BeautifulSoup(response.text or "", "lxml")
+    soup = _make_soup(response.text or "")
     lineup_tag = soup.select_one(".match-lineup")
     if not lineup_tag:
         logger.info(f"No lineup available for game {game_id}")

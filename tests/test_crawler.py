@@ -190,6 +190,24 @@ async def test_get_club_teams(mock_fetch, club_teams_html):
 
 @pytest.mark.asyncio
 @patch("fussball_api.crawler.fetch_url")
+async def test_get_club_teams_removes_zero_width_spaces(mock_fetch):
+    """Tests that zero-width spaces used by fussball.de are removed from names."""
+    html = """
+    <div class="item">
+        <h4><a href="/mannschaft/sg/-/mannschaft/0A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P">Herren - 1. FC Burg/&#8203;SG Marßel</a></h4>
+    </div>
+    """
+    mock_fetch.return_value = FetchedResponse(
+        url="u", status_code=200, headers={}, content=html.encode("utf-8"), text=html
+    )
+
+    teams = await get_club_teams("test_club_id")
+
+    assert teams[0].name == "Herren - 1. FC Burg/SG Marßel"
+
+
+@pytest.mark.asyncio
+@patch("fussball_api.crawler.fetch_url")
 async def test_get_team_table(mock_fetch, team_table_html):
     """Tests the parsing of a team's league table."""
     # Arrange
