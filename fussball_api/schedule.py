@@ -82,20 +82,29 @@ def is_cancelled_status(status: Optional[str]) -> bool:
 def _parse_headline(text: str) -> Optional[Dict]:
     """
     Parses a headline like "Samstag, 24.10.2026 - 17:00 Uhr | Bezirksliga".
+    fussball.de leaves the time empty or writes "**" while the kick-off is not set yet.
 
     :param text: The headline text.
-    :return: A dict with local_dt and competition, or None if it cannot be parsed.
+    :return: A dict with date, local_dt (None without kick-off time) and competition,
+        or None if the date cannot be parsed.
     """
     date_part, _, rest = text.partition(" - ")
     parts = [part.strip() for part in rest.split(" | ")]
     try:
-        date_str = date_part.split(", ")[1].strip()
-        time_str = parts[0].replace("Uhr", "").strip()
-        naive_dt = datetime.strptime(f"{date_str} {time_str}", "%d.%m.%Y %H:%M")
+        game_date = datetime.strptime(date_part.split(", ")[1].strip(), "%d.%m.%Y").date()
     except (IndexError, ValueError):
         return None
+    time_str = parts[0].replace("Uhr", "").strip()
+    local_dt = None
+    if re.fullmatch(r"\d{1,2}:\d{2}", time_str):
+        try:
+            local_dt = datetime.strptime(f"{game_date.isoformat()} {time_str}", "%Y-%m-%d %H:%M").replace(tzinfo=_LOCAL_TZ)
+        except ValueError:
+            return None
+    elif time_str.strip("*-") != "":
+        return None
     competition = parts[-1] if len(parts) > 1 and parts[-1] else None
-    return {"local_dt": naive_dt.replace(tzinfo=_LOCAL_TZ), "competition": competition}
+    return {"date": game_date, "local_dt": local_dt, "competition": competition}
 
 
 def _club_side(cell) -> Optional[Dict[str, Optional[str]]]:
@@ -157,6 +166,10 @@ def parse_schedule_html(html: str, team_id: str) -> List[ScheduleGame]:
             continue
 
         club_cells = row.find_all("td", class_="column-club")
+        # A bye ("spielfrei") has no opponent and no game link; it is not a game.
+        if not score_cell.find("a", href=True) and "spielfrei" in row.get_text(" ", strip=True).lower():
+            last_game = None
+            continue
         sides = [_club_side(cell) for cell in club_cells]
         link = score_cell.find("a", href=True)
         if len(sides) != 2 or None in sides or not link:
@@ -183,9 +196,9 @@ def parse_schedule_html(html: str, team_id: str) -> List[ScheduleGame]:
             away_team_id=away["team_id"],
             opponent=away["name"] if is_home else home["name"],
             title=f"{home['name']} – {away['name']}",
-            date=local_dt.strftime("%Y-%m-%d"),
-            time=local_dt.strftime("%H:%M"),
-            datetime_utc=local_dt.astimezone(ZoneInfo("UTC")),
+            date=headline["date"].isoformat(),
+            time=local_dt.strftime("%H:%M") if local_dt else None,
+            datetime_utc=local_dt.astimezone(ZoneInfo("UTC")) if local_dt else None,
             competition=headline["competition"],
             status=status or None,
             is_cancelled=is_cancelled_status(status),

@@ -300,8 +300,8 @@ class ScheduleGame(BaseModel):
     :ivar opponent: The name of the other side.
     :ivar title: "<home> – <away>".
     :ivar date: The local (Europe/Berlin) date, e.g. "2026-10-24".
-    :ivar time: The local (Europe/Berlin) kick-off time, e.g. "17:00".
-    :ivar datetime_utc: The kick-off in UTC.
+    :ivar time: The local (Europe/Berlin) kick-off time, e.g. "17:00"; None while fussball.de has none.
+    :ivar datetime_utc: The kick-off in UTC; None while fussball.de has no kick-off time.
     :ivar competition: The competition name.
     :ivar venue: The full raw venue text.
     :ivar venue_name: The venue name without surface prefix.
@@ -323,8 +323,8 @@ class ScheduleGame(BaseModel):
     opponent: str
     title: str
     date: str
-    time: str
-    datetime_utc: datetime
+    time: Optional[str] = None
+    datetime_utc: Optional[datetime] = None
     competition: Optional[str] = None
     venue: Optional[str] = None
     venue_name: Optional[str] = None

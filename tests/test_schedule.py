@@ -183,3 +183,33 @@ async def test_get_team_schedule_missing_cached_text_is_failure(monkeypatch):
 async def test_get_team_schedule_foreign_page_is_failure(monkeypatch):
     _fake_fetch(monkeypatch, "<html><body>Wartungsarbeiten</body></html>")
     assert await get_team_schedule(HERREN, today=date(2026, 10, 21)) is None
+
+
+@pytest.mark.parametrize("missing", ["", "**"])
+def test_game_without_kickoff_time_keeps_date(missing):
+    html = (FIXTURES / "matchplan_herren.html").read_text(encoding="utf-8")
+    html = html.replace("Samstag, 24.10.2026 - 17:00 Uhr", f"Samstag, 24.10.2026 - {missing} Uhr", 1)
+    games = parse_schedule_html(html, HERREN)
+    assert len(games) == 23
+    first = games[0]
+    assert (first.date, first.time, first.datetime_utc) == ("2026-10-24", None, None)
+    assert first.title == "Spvgg. Buchenbach – SV BW Waltershofen"
+    assert first.competition == "Bezirksliga"
+    assert first.venue_name == "Sportplatz Buchenbach (RP)"
+
+
+BYE_ROW = """<tr class="row-headline visible-small"><td colspan="6">Freitag, 30.10.2026 - ** Uhr | Bezirksliga</td></tr>
+<tr><td class="hidden-small"></td>
+<td class="column-club"><a class="club-wrapper" href="https://www.fussball.de/mannschaft/x/-/saison/2627/team-id/011MIA3QP0000000VTVG0001VTR8C1K7"><div class="club-name">Spvgg. Buchenbach</div></a></td>
+<td class="column-colon">:</td>
+<td class="column-club no-border"><span class="info-text">spielfrei</span></td>
+<td class="column-score"></td><td class="column-detail"></td></tr>"""
+
+
+def test_bye_row_is_skipped():
+    html = (FIXTURES / "matchplan_herren.html").read_text(encoding="utf-8")
+    first_headline = html.index('<tr class="row-headline')
+    html = html[:first_headline] + BYE_ROW + html[first_headline:]
+    games = parse_schedule_html(html, HERREN)
+    assert len(games) == 23
+    assert games[0].id == "031DERJ46K000000VS5489BTVUS470OH"
