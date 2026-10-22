@@ -1,11 +1,13 @@
+import asyncio
 import logging
 import re
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from .crawler import _make_soup
-from .schemas import ScheduleGame
+from .cache import fetch_url
+from .crawler import FUSSBALL_DE_BASE_URL, _make_soup
+from .schemas import ScheduleGame, TeamSchedule
 
 logger = logging.getLogger(__name__)
 
@@ -180,3 +182,36 @@ def parse_schedule_html(html: str, team_id: str) -> List[ScheduleGame]:
         games.append(last_game)
 
     return games
+
+
+async def get_team_schedule(team_id: str, today: Optional[date] = None) -> Optional[TeamSchedule]:
+    """
+    Fetches all upcoming games of a team for the next year, including venues.
+
+    :param team_id: The unique ID of the team from fussball.de.
+    :param today: The first day of the range; defaults to today in Europe/Berlin.
+    :return: The schedule, or None if fussball.de could not be fetched.
+    """
+    date_from = today or datetime.now(_LOCAL_TZ).date()
+    date_to = date_from + timedelta(days=365)
+    url = (
+        f"{FUSSBALL_DE_BASE_URL}/ajax.team.matchplan/-/datum-bis/{date_to.isoformat()}"
+        f"/datum-von/{date_from.isoformat()}/max/200/mode/PAGE/show-venues/true/team-id/{team_id}"
+    )
+    logger.info(f"Fetching schedule from URL: {url}")
+    response = await asyncio.to_thread(fetch_url, url)
+
+    if response is None or response.status_code >= 400:
+        status = response.status_code if response else "no response"
+        logger.warning(f"Could not fetch schedule for team {team_id} ({status}).")
+        return None
+
+    html = response.text or ""
+    games = parse_schedule_html(html, team_id) if html.strip() else []
+    logger.info(f"Parsed {len(games)} schedule games for team {team_id}")
+    return TeamSchedule(
+        team_id=team_id,
+        date_from=date_from.isoformat(),
+        date_to=date_to.isoformat(),
+        games=games,
+    )

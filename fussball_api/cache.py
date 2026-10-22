@@ -68,6 +68,9 @@ http_cache = TTLCache(maxsize=1024, ttl=settings.CACHE_TTL_GAMES)
 from .schemas import FullClubInfoResponse
 club_info_cache: Dict[str, FullClubInfoResponse] = {}
 
+# Team id -> last time (UTC) its schedule was requested; refreshed by the pre-warm loop
+recent_schedule_teams: Dict[str, datetime] = {}
+
 CACHE_DIR: Path = settings.CACHE_DIR
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 

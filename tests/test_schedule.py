@@ -1,9 +1,12 @@
+from datetime import date
 from pathlib import Path
 
 import pytest
 
+from fussball_api.cache import FetchedResponse
 from fussball_api.schedule import (
     detect_surface,
+    get_team_schedule,
     is_cancelled_status,
     parse_schedule_html,
     split_venue,
@@ -103,3 +106,25 @@ def test_game_without_venue_row():
     games = parse_schedule_html(html[:start] + html[end:], HERREN)
     assert games[0].venue is None and games[0].surface is None
     assert games[1].venue is not None
+
+
+@pytest.mark.asyncio
+async def test_get_team_schedule_builds_url_and_parses(monkeypatch):
+    seen = {}
+    html = (FIXTURES / "matchplan_herren.html").read_text(encoding="utf-8")
+
+    def fake_fetch(url, *args, **kwargs):
+        seen["url"] = url
+        return FetchedResponse(url=url, status_code=200, headers={}, content=b"", text=html)
+
+    monkeypatch.setattr("fussball_api.schedule.fetch_url", fake_fetch)
+    result = await get_team_schedule(HERREN, today=date(2026, 10, 21))
+    assert "datum-von/2026-10-21" in seen["url"] and "datum-bis/2027-10-21" in seen["url"]
+    assert "show-venues/true" in seen["url"] and "max/200" in seen["url"]
+    assert len(result.games) == 24
+
+
+@pytest.mark.asyncio
+async def test_get_team_schedule_failure_returns_none(monkeypatch):
+    monkeypatch.setattr("fussball_api.schedule.fetch_url", lambda url, *a, **k: None)
+    assert await get_team_schedule(HERREN, today=date(2026, 10, 21)) is None

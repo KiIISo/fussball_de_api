@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
@@ -7,7 +8,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .cache import load_caches_from_file, save_caches_to_file
+from .cache import load_caches_from_file, recent_schedule_teams, save_caches_to_file
 from .config import settings
 from .crawler import (
     get_club_next_games,
@@ -21,6 +22,7 @@ from .crawler import (
     get_game_lineup,
 )
 from .logging_config import setup_logging
+from .schedule import get_team_schedule
 from .schemas import (
     ClubInfoResponse,
     ClubSearchResult,
@@ -30,6 +32,7 @@ from .schemas import (
     Table,
     Team,
     TeamInfoResponse,
+    TeamSchedule,
     TeamWithDetails,
 )
 from .security import get_api_key
@@ -434,6 +437,29 @@ async def read_team_next_games(team_id: str):
                 logger.debug(f"Serving next_games for team {team_id} from object cache")
                 return team.next_games
     return await get_team_next_games(team_id)
+
+
+@app.get(
+    "/api/team/{team_id}/schedule",
+    response_model=TeamSchedule,
+    dependencies=[Depends(get_api_key)],
+)
+async def read_team_schedule(team_id: str):
+    """
+    Retrieves all upcoming games of a team for the season as flat entries with venues.
+
+    :param team_id: The unique ID of the team from fussball.de.
+    :return: The team schedule.
+    :raises HTTPException: 502 if fussball.de could not be fetched.
+    """
+    recent_schedule_teams[team_id] = datetime.now(timezone.utc)
+    schedule = await get_team_schedule(team_id)
+    if schedule is None:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="fussball.de nicht erreichbar",
+        )
+    return schedule
 
 
 @app.get(

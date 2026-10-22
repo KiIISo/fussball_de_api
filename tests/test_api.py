@@ -13,6 +13,7 @@ from fussball_api.schemas import (
     TableEntry,
     Team,
     TeamInfoResponse,
+    TeamSchedule,
     TeamWithDetails,
 )
 
@@ -214,3 +215,27 @@ def test_read_game_by_id_endpoint_ok_and_404(client: TestClient, monkeypatch):
     monkeypatch.setattr(main, "get_game_by_id", fake_none)
     nf = client.get("/api/game/GNF")
     assert nf.status_code == 404
+
+
+def test_team_schedule_endpoint(client, monkeypatch):
+    schedule = TeamSchedule(team_id="T1", date_from="2026-10-21", date_to="2027-10-21", games=[])
+
+    async def fake(team_id, today=None):
+        assert team_id == "T1"
+        return schedule
+
+    monkeypatch.setattr("fussball_api.main.get_team_schedule", fake)
+    response = client.get("/api/team/T1/schedule")
+    assert response.status_code == 200
+    assert response.json()["games"] == []
+    from fussball_api.cache import recent_schedule_teams
+    assert "T1" in recent_schedule_teams
+
+
+def test_team_schedule_endpoint_fetch_failure(client, monkeypatch):
+    async def fake(team_id, today=None):
+        return None
+
+    monkeypatch.setattr("fussball_api.main.get_team_schedule", fake)
+    response = client.get("/api/team/T1/schedule")
+    assert response.status_code == 502
