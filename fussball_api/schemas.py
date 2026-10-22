@@ -284,3 +284,69 @@ class FullClubInfoResponse(BaseModel):
     club_prev_games: List[Game]
     club_next_games: List[Game]
     teams: List[TeamWithDetails]
+
+
+class ScheduleGame(BaseModel):
+    """
+    Represents one upcoming game of a team as a flat, readable entry.
+
+    :ivar id: The unique game id on fussball.de.
+    :ivar team_id: The id of the requested team.
+    :ivar is_home: Whether the requested team is listed as the home (left) side.
+    :ivar home_team: The name of the home team.
+    :ivar away_team: The name of the away team.
+    :ivar home_team_id: The fussball.de team id of the home team, if linked.
+    :ivar away_team_id: The fussball.de team id of the away team, if linked.
+    :ivar opponent: The name of the other side.
+    :ivar title: "<home> – <away>".
+    :ivar date: The local (Europe/Berlin) date, e.g. "2026-10-24".
+    :ivar time: The local (Europe/Berlin) kick-off time, e.g. "17:00".
+    :ivar datetime_utc: The kick-off in UTC.
+    :ivar competition: The competition name.
+    :ivar venue: The full raw venue text.
+    :ivar venue_name: The venue name without surface prefix.
+    :ivar venue_street: The street of the venue.
+    :ivar venue_postal_code: The postal code of the venue.
+    :ivar venue_city: The city of the venue.
+    :ivar surface: "KUNSTRASEN", "RASEN" or None.
+    :ivar status: The raw status text (e.g. "Absetzung").
+    :ivar is_cancelled: Whether the status marks the game as cancelled.
+    """
+
+    id: str
+    team_id: str
+    is_home: bool
+    home_team: str
+    away_team: str
+    home_team_id: Optional[str] = None
+    away_team_id: Optional[str] = None
+    opponent: str
+    title: str
+    date: str
+    time: str
+    datetime_utc: datetime
+    competition: Optional[str] = None
+    venue: Optional[str] = None
+    venue_name: Optional[str] = None
+    venue_street: Optional[str] = None
+    venue_postal_code: Optional[str] = None
+    venue_city: Optional[str] = None
+    surface: Optional[str] = None
+    status: Optional[str] = None
+    is_cancelled: bool = False
+
+
+class TeamSchedule(BaseModel):
+    """
+    Represents all upcoming games of a team within a date range.
+
+    :ivar team_id: The id of the team.
+    :ivar date_from: The first day of the range (local date).
+    :ivar date_to: The last day of the range (local date).
+    :ivar games: The games in chronological order.
+    """
+
+    team_id: str
+    date_from: str
+    date_to: str
+    games: List[ScheduleGame]
