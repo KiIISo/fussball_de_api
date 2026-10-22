@@ -13,9 +13,12 @@ logger = logging.getLogger(__name__)
 
 _SURFACE_PREFIXES = ("Kunstrasenplatz", "Rasenplatz")
 _POSTAL_CITY = re.compile(r"^(\d{5}) (.+)$")
-_CANCELLED_MARKERS = ("absetzung", "abgesagt", "ausfall", "annulliert")
+_CANCELLED_MARKERS = ("absetzung", "abgesetzt", "abgesagt", "ausfall", "annulliert")
 _TEAM_ID = re.compile(r"/team-id/([^/?#]+)")
 _LOCAL_TZ = ZoneInfo("Europe/Berlin")
+_MATCHPLAN_MARKER = "id-team-matchplan-table"
+# A rescheduled game is listed a second time at its old slot, with the new kick-off as info text
+_MOVED_TO = re.compile(r"^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$")
 
 
 def detect_surface(venue: str) -> Optional[str]:
@@ -120,7 +123,11 @@ def parse_schedule_html(html: str, team_id: str) -> List[ScheduleGame]:
     :param html: The HTML of ajax.team.matchplan with show-venues/true.
     :param team_id: The id of the requested team.
     :return: The games in the order fussball.de lists them.
+    :raises ValueError: If the page is no matchplan or a headline or game row cannot be parsed,
+        so that a broken page never looks like a shorter schedule.
     """
+    if _MATCHPLAN_MARKER not in html:
+        raise ValueError("Page is not a team matchplan.")
     soup = _make_soup(html)
     games: List[ScheduleGame] = []
     headline: Optional[Dict] = None
@@ -131,7 +138,7 @@ def parse_schedule_html(html: str, team_id: str) -> List[ScheduleGame]:
         if "row-headline" in classes:
             headline = _parse_headline(row.get_text(" ", strip=True))
             if headline is None:
-                logger.warning(f"Could not parse schedule headline: '{row.get_text(strip=True)}'")
+                raise ValueError(f"Could not parse schedule headline: '{row.get_text(strip=True)}'")
             last_game = None
             continue
 
@@ -153,13 +160,17 @@ def parse_schedule_html(html: str, team_id: str) -> List[ScheduleGame]:
         sides = [_club_side(cell) for cell in club_cells]
         link = score_cell.find("a", href=True)
         if len(sides) != 2 or None in sides or not link:
-            logger.warning(f"Could not parse schedule game row for team {team_id}. Skipping.")
+            raise ValueError(f"Could not parse schedule game row for team {team_id}.")
+
+        status_tag = score_cell.find("span", class_="info-text")
+        status = status_tag.get_text(strip=True) if status_tag else None
+        if status and _MOVED_TO.match(status):
+            # Old slot of a rescheduled game; the game is listed again at its new slot.
+            last_game = None
             continue
 
         home, away = sides
         is_home = home["team_id"] == team_id
-        status_tag = score_cell.find("span", class_="info-text")
-        status = status_tag.get_text(strip=True) if status_tag else None
         local_dt = headline["local_dt"]
 
         last_game = ScheduleGame(
@@ -206,8 +217,17 @@ async def get_team_schedule(team_id: str, today: Optional[date] = None) -> Optio
         logger.warning(f"Could not fetch schedule for team {team_id} ({status}).")
         return None
 
-    html = response.text or ""
-    games = parse_schedule_html(html, team_id) if html.strip() else []
+    # None means the cached body could not be loaded; only a real "" is an empty schedule.
+    if response.text is None:
+        logger.warning(f"No response text for schedule of team {team_id}.")
+        return None
+
+    html = response.text
+    try:
+        games = parse_schedule_html(html, team_id) if html.strip() else []
+    except ValueError as e:
+        logger.error(f"Could not parse schedule for team {team_id}: {e}")
+        return None
     logger.info(f"Parsed {len(games)} schedule games for team {team_id}")
     return TeamSchedule(
         team_id=team_id,

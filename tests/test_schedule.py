@@ -50,7 +50,7 @@ def test_split_venue_name_only():
 
 
 @pytest.mark.parametrize("status,expected", [
-    ("Absetzung", True), ("abgesagt", True), ("Spielausfall", True),
+    ("Absetzung", True), ("abgesetzt", True), ("abgesagt", True), ("Spielausfall", True),
     ("verlegt", False), (None, False), ("", False),
 ])
 def test_is_cancelled_status(status, expected):
@@ -68,7 +68,7 @@ def _games(name, team_id):
 
 def test_parse_herren_schedule():
     games = _games("matchplan_herren.html", HERREN)
-    assert len(games) == 24
+    assert len(games) == 23
     first = games[0]
     assert first.id == "031DERJ46K000000VS5489BTVUS470OH"
     assert first.is_home is True
@@ -121,10 +121,65 @@ async def test_get_team_schedule_builds_url_and_parses(monkeypatch):
     result = await get_team_schedule(HERREN, today=date(2026, 10, 21))
     assert "datum-von/2026-10-21" in seen["url"] and "datum-bis/2027-10-21" in seen["url"]
     assert "show-venues/true" in seen["url"] and "max/200" in seen["url"]
-    assert len(result.games) == 24
+    assert len(result.games) == 23
 
 
 @pytest.mark.asyncio
 async def test_get_team_schedule_failure_returns_none(monkeypatch):
     monkeypatch.setattr("fussball_api.schedule.fetch_url", lambda url, *a, **k: None)
+    assert await get_team_schedule(HERREN, today=date(2026, 10, 21)) is None
+
+
+def test_rescheduled_game_appears_once_at_new_slot():
+    games = _games("matchplan_herren.html", HERREN)
+    ids = [game.id for game in games]
+    assert len(ids) == len(set(ids))
+    moved = [game for game in games if game.id.startswith("031DERJBGS")]
+    assert len(moved) == 1
+    assert (moved[0].date, moved[0].time) == ("2027-05-14", "18:45")
+    assert moved[0].venue is not None
+
+
+def test_parse_rejects_page_without_matchplan():
+    with pytest.raises(ValueError):
+        parse_schedule_html("<html><body>Wartungsarbeiten</body></html>", HERREN)
+
+
+def test_parse_rejects_unparseable_headline():
+    html = (FIXTURES / "matchplan_herren.html").read_text(encoding="utf-8")
+    html = html.replace("Samstag, 24.10.2026 - 17:00 Uhr", "Samstag, kaputt", 1)
+    with pytest.raises(ValueError):
+        parse_schedule_html(html, HERREN)
+
+
+def _fake_fetch(monkeypatch, text, status_code=200):
+    def fake_fetch(url, *args, **kwargs):
+        return FetchedResponse(url=url, status_code=status_code, headers={}, content=b"", text=text)
+
+    monkeypatch.setattr("fussball_api.schedule.fetch_url", fake_fetch)
+
+
+@pytest.mark.asyncio
+async def test_get_team_schedule_real_empty_page_is_empty_schedule(monkeypatch):
+    _fake_fetch(monkeypatch, (FIXTURES / "matchplan_empty.html").read_text(encoding="utf-8"))
+    result = await get_team_schedule(HERREN, today=date(2026, 10, 21))
+    assert result is not None and result.games == []
+
+
+@pytest.mark.asyncio
+async def test_get_team_schedule_empty_body_is_empty_schedule(monkeypatch):
+    _fake_fetch(monkeypatch, "")
+    result = await get_team_schedule(HERREN, today=date(2026, 10, 21))
+    assert result is not None and result.games == []
+
+
+@pytest.mark.asyncio
+async def test_get_team_schedule_missing_cached_text_is_failure(monkeypatch):
+    _fake_fetch(monkeypatch, None)
+    assert await get_team_schedule(HERREN, today=date(2026, 10, 21)) is None
+
+
+@pytest.mark.asyncio
+async def test_get_team_schedule_foreign_page_is_failure(monkeypatch):
+    _fake_fetch(monkeypatch, "<html><body>Wartungsarbeiten</body></html>")
     assert await get_team_schedule(HERREN, today=date(2026, 10, 21)) is None
