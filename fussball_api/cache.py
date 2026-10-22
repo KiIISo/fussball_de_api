@@ -5,6 +5,8 @@ from typing import Any, Optional, Dict
 from cachetools import TTLCache
 import os
 import pickle
+import threading
+import time
 import httpx
 import hashlib
 import json
@@ -77,6 +79,24 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_DUMP_FILE = CACHE_DIR / "fussball_cache.json"
 
 
+_throttle_lock = threading.Lock()
+_last_live_fetch: Optional[float] = None
+
+
+def _throttle() -> None:
+    """
+    Blocks until the next live request to fussball.de is allowed, so that
+    two live requests are at least FETCH_MIN_INTERVAL_SECONDS apart.
+    """
+    global _last_live_fetch
+    with _throttle_lock:
+        if _last_live_fetch is not None:
+            wait = settings.FETCH_MIN_INTERVAL_SECONDS - (time.monotonic() - _last_live_fetch)
+            if wait > 0:
+                time.sleep(wait)
+        _last_live_fetch = time.monotonic()
+
+
 def _url_hash(url: str) -> str:
     return hashlib.md5(url.encode("utf-8")).hexdigest()
 
@@ -114,6 +134,7 @@ def fetch_url(
     # If cache entry exists but expired, try a HEAD request first
     if entry and entry.expires_at and entry.expires_at <= now:
         try:
+            _throttle()
             with httpx.Client(follow_redirects=True) as client:
                 head_resp = client.head(url, headers={})
             if head_resp.status_code == 200:
@@ -138,6 +159,7 @@ def fetch_url(
             logger.warning(f"HEAD request failed for {url}: {e}")
 
     try:
+        _throttle()
         with httpx.Client(follow_redirects=True) as client:
             resp = client.request(method, url, headers=headers)
     except httpx.RequestError as e:

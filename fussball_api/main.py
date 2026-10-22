@@ -1,8 +1,8 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -62,10 +62,39 @@ app.mount(
 )
 
 
+async def refresh_recent_schedules(now: Optional[datetime] = None) -> int:
+    """
+    Refreshes the schedules of all recently requested teams and forgets
+    teams that were not requested within PREWARM_RECENT_DAYS.
+
+    :param now: The current time (UTC); defaults to now.
+    :return: The number of refreshed teams.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=settings.PREWARM_RECENT_DAYS)
+    for team_id, requested_at in list(recent_schedule_teams.items()):
+        if requested_at < cutoff:
+            del recent_schedule_teams[team_id]
+
+    team_ids = list(recent_schedule_teams)
+    sem = asyncio.Semaphore(5)
+
+    async def refresh(team_id: str):
+        async with sem:
+            return await get_team_schedule(team_id)
+
+    results = await asyncio.gather(*(refresh(team_id) for team_id in team_ids), return_exceptions=True)
+    for team_id, result in zip(team_ids, results):
+        if isinstance(result, Exception):
+            logger.error(f"Pre-warming schedule for team {team_id} failed: {result}")
+    return len(team_ids)
+
+
 async def prewarm_cache():
     """
     A background task that periodically fetches data for a configured club
-    to keep the cache warm. Limits concurrent requests with a semaphore.
+    and the schedules of recently requested teams to keep the cache warm.
+    Limits concurrent requests with a semaphore.
     """
     logger.info(
         f"Starting cache pre-warming for club ID: {settings.PREWARM_CLUB_ID} "
@@ -78,63 +107,70 @@ async def prewarm_cache():
             return await coro
 
     while True:
-        try:
-            club_id = settings.PREWARM_CLUB_ID
-            logger.info(f"Running pre-warming cycle for club: {club_id}")
-
-            # First, fetch the list of teams for the club.
-            teams = await get_club_teams(club_id)
-            tasks = []
-            if not teams:
-                logger.warning(f"Pre-warming: Could not fetch teams for club {club_id}.")
-            else:
-                # Prepare all data fetching tasks.
-                tasks = [
-                    run_with_limit(get_club_next_games(club_id)),
-                    run_with_limit(get_club_prev_games(club_id)),
-                ]
-                for team in teams:
-                    tasks.append(run_with_limit(get_team_next_games(team.id)))
-                    tasks.append(run_with_limit(get_team_prev_games(team.id)))
-                    tasks.append(run_with_limit(get_team_table(team.id)))
-
-                # Execute all tasks concurrently, ignoring individual errors.
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                for i, result in enumerate(results):
-                    if isinstance(result, Exception):
-                        logger.error(f"Pre-warming task failed with exception: {result}")
-
-            # Build and cache full club info object
-            from .schemas import FullClubInfoResponse, TeamWithDetails
-            from .cache import club_info_cache
+        if settings.PREWARM_CLUB_ID:
             try:
-                if teams:
-                    teams_with_details = []
-                    for i, team in enumerate(teams):
-                        next_games = results[2 + i*3]
-                        prev_games = results[2 + i*3 + 1]
-                        table = results[2 + i*3 + 2]
-                        teams_with_details.append(
-                            TeamWithDetails(
-                                **team.model_dump(),
-                                table=table,
-                                next_games=next_games,
-                                prev_games=prev_games,
+                club_id = settings.PREWARM_CLUB_ID
+                logger.info(f"Running pre-warming cycle for club: {club_id}")
+
+                # First, fetch the list of teams for the club.
+                teams = await get_club_teams(club_id)
+                tasks = []
+                if not teams:
+                    logger.warning(f"Pre-warming: Could not fetch teams for club {club_id}.")
+                else:
+                    # Prepare all data fetching tasks.
+                    tasks = [
+                        run_with_limit(get_club_next_games(club_id)),
+                        run_with_limit(get_club_prev_games(club_id)),
+                    ]
+                    for team in teams:
+                        tasks.append(run_with_limit(get_team_next_games(team.id)))
+                        tasks.append(run_with_limit(get_team_prev_games(team.id)))
+                        tasks.append(run_with_limit(get_team_table(team.id)))
+
+                    # Execute all tasks concurrently, ignoring individual errors.
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    for i, result in enumerate(results):
+                        if isinstance(result, Exception):
+                            logger.error(f"Pre-warming task failed with exception: {result}")
+
+                # Build and cache full club info object
+                from .schemas import FullClubInfoResponse, TeamWithDetails
+                from .cache import club_info_cache
+                try:
+                    if teams:
+                        teams_with_details = []
+                        for i, team in enumerate(teams):
+                            next_games = results[2 + i*3]
+                            prev_games = results[2 + i*3 + 1]
+                            table = results[2 + i*3 + 2]
+                            teams_with_details.append(
+                                TeamWithDetails(
+                                    **team.model_dump(),
+                                    table=table,
+                                    next_games=next_games,
+                                    prev_games=prev_games,
+                                )
                             )
+                        club_info_cache[club_id] = FullClubInfoResponse(
+                            club_prev_games=results[1],
+                            club_next_games=results[0],
+                            teams=teams_with_details,
                         )
-                    club_info_cache[club_id] = FullClubInfoResponse(
-                        club_prev_games=results[1],
-                        club_next_games=results[0],
-                        teams=teams_with_details,
-                    )
-                    logger.debug(f"Updated club_info_cache for {club_id} with {len(teams_with_details)} teams")
+                        logger.debug(f"Updated club_info_cache for {club_id} with {len(teams_with_details)} teams")
+                except Exception as e:
+                    logger.error(f"Failed to build full club info object during pre-warming: {e}")
+
+                logger.info(f"Pre-warming cycle for club {club_id} completed.")
+
             except Exception as e:
-                logger.error(f"Failed to build full club info object during pre-warming: {e}")
+                logger.critical(f"An unexpected error occurred in the pre-warming task: {e}")
 
-            logger.info(f"Pre-warming cycle for club {club_id} completed.")
-
+        try:
+            refreshed = await refresh_recent_schedules()
+            logger.info(f"Pre-warming: refreshed {refreshed} recently requested team schedules.")
         except Exception as e:
-            logger.critical(f"An unexpected error occurred in the pre-warming task: {e}")
+            logger.error(f"Pre-warming of recent team schedules failed: {e}")
 
         # Wait for the configured interval before the next run.
         await asyncio.sleep(settings.PREWARM_INTERVAL_SECONDS)
@@ -144,16 +180,15 @@ async def prewarm_cache():
 async def startup_event():
     """
     Actions to perform on application startup.
-    - Starts the cache pre-warming background task if configured.
+    - Starts the cache pre-warming background task.
     """
     # Load caches if available
     load_caches_from_file()
     logger.info("Persistent cache loaded from file (if it existed).")
 
-    if settings.PREWARM_CLUB_ID:
-        asyncio.create_task(prewarm_cache())
-    else:
-        logger.info("Cache pre-warming is disabled. Set PREWARM_CLUB_ID to enable it.")
+    if not settings.PREWARM_CLUB_ID:
+        logger.info("Club pre-warming is disabled. Set PREWARM_CLUB_ID to enable it.")
+    asyncio.create_task(prewarm_cache())
 
 
 @app.on_event("shutdown")

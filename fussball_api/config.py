@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     :ivar CACHE_TTL_TEAMS: TTL for club team list caches in seconds.
     :ivar PREWARM_CLUB_ID: If set, proactively caches all data for this club ID.
     :ivar PREWARM_INTERVAL_SECONDS: Interval for the pre-warming job in seconds.
+    :ivar PREWARM_RECENT_DAYS: Schedules of teams requested within this many days are kept warm.
+    :ivar FETCH_MIN_INTERVAL_SECONDS: Minimum gap between two live requests to fussball.de.
     """
 
     model_config = SettingsConfigDict(
@@ -35,6 +37,10 @@ class Settings(BaseSettings):
     # Proactive Caching (Pre-warming)
     PREWARM_CLUB_ID: Optional[str] = None
     PREWARM_INTERVAL_SECONDS: int = 300  # 5 minutes
+    PREWARM_RECENT_DAYS: int = 14
+
+    # Throttling of live requests to fussball.de (across all threads)
+    FETCH_MIN_INTERVAL_SECONDS: float = 0.5
 
     # Cache directory (configurable via environment variable)
     CACHE_DIR: Path = Path("./cache_payloads")

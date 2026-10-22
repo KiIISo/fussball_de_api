@@ -239,3 +239,21 @@ def test_team_schedule_endpoint_fetch_failure(client, monkeypatch):
     monkeypatch.setattr("fussball_api.main.get_team_schedule", fake)
     response = client.get("/api/team/T1/schedule")
     assert response.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_refresh_recent_schedules_drops_old_teams(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from fussball_api import main
+    from fussball_api.cache import recent_schedule_teams
+    now = datetime(2026, 10, 21, tzinfo=timezone.utc)
+    recent_schedule_teams.clear()
+    recent_schedule_teams.update({"NEW": now - timedelta(days=1), "OLD": now - timedelta(days=30)})
+    called = []
+
+    async def fake(team_id, today=None):
+        called.append(team_id)
+
+    monkeypatch.setattr(main, "get_team_schedule", fake)
+    assert await main.refresh_recent_schedules(now) == 1
+    assert called == ["NEW"] and "OLD" not in recent_schedule_teams

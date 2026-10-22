@@ -45,6 +45,8 @@ Um die Anwendung lokal für die Entwicklung auszuführen, befolge diese Schritte
     - **`LOG_LEVEL`**: Passe den Log-Level an. Verwende `DEBUG` für eine detaillierte Ausgabe.
     - **`CACHE_TTL_*`**: Konfiguriere die Gültigkeitsdauer für verschiedene Cache-Typen.
     - **`PREWARM_CLUB_ID`**: Setze optional eine Vereins-ID, um proaktives Caching für einen bestimmten Verein zu aktivieren.
+    - **`PREWARM_RECENT_DAYS`**: Spielpläne von Teams, die innerhalb so vieler Tage über `/api/team/{team_id}/schedule` abgefragt wurden, hält der Pre-Warm-Loop aktuell (Standard: 14).
+    - **`FETCH_MIN_INTERVAL_SECONDS`**: Mindestabstand zwischen zwei Live-Anfragen an fussball.de, über alle Threads hinweg (Standard: 0.5). Wichtig, wenn die API zentral für viele Installationen läuft.
     - **`CACHE_DIR`**: Verzeichnis für persistente Cache-Dateien (optional, z. B. bei Docker-Betrieb).
 
     Hinweis: Wird `CACHE_DIR` gesetzt, erwartet die Anwendung die Cache-Datei unter
@@ -88,7 +90,10 @@ Wichtige Endpunkte (Auswahl):
 - GET /api/team/{team_id}/table -> Tabelle eines Teams
 - GET /api/team/{team_id}/next_games -> Nächste Spiele (Team)
 - GET /api/team/{team_id}/prev_games -> Vorherige Spiele (Team)
+- GET /api/team/{team_id}/schedule -> Alle anstehenden Spiele der Saison als flache Einträge
+  (Titel, Datum, Uhrzeit, Spielort, Belag, Heim/Auswärts, abgesagt); 502, wenn fussball.de nicht erreichbar ist
 - GET /api/game/{game_id}       -> Spiel-Details
+- GET /api/game/{game_id}/lineup -> Aufstellungen eines Spiels
 
 ### Interaktive API-Dokumentation (OpenAPI)
 
