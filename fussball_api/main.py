@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from pathlib import Path
 from typing import List
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
@@ -51,7 +52,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/examples", StaticFiles(directory="./examples"), name="examples")
+app.mount(
+    "/examples",
+    StaticFiles(directory=Path(__file__).resolve().parent.parent / "examples"),
+    name="examples",
+)
 
 
 async def prewarm_cache():

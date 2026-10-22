@@ -19,8 +19,6 @@ from fussball_api.schemas import (
 
 @pytest.fixture
 def client(monkeypatch):
-    # Ensure that the StaticFiles mount path ../examples resolves correctly
-    monkeypatch.chdir("fussball_api")
     from fussball_api.main import app
     from fussball_api.security import get_api_key
     app.dependency_overrides[get_api_key] = lambda: None
