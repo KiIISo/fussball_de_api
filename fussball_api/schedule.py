@@ -1,12 +1,19 @@
 import logging
 import re
-from typing import Dict, Optional
+from datetime import datetime
+from typing import Dict, List, Optional
+from zoneinfo import ZoneInfo
+
+from .crawler import _make_soup
+from .schemas import ScheduleGame
 
 logger = logging.getLogger(__name__)
 
 _SURFACE_PREFIXES = ("Kunstrasenplatz", "Rasenplatz")
 _POSTAL_CITY = re.compile(r"^(\d{5}) (.+)$")
 _CANCELLED_MARKERS = ("absetzung", "abgesagt", "ausfall", "annulliert")
+_TEAM_ID = re.compile(r"/team-id/([^/?#]+)")
+_LOCAL_TZ = ZoneInfo("Europe/Berlin")
 
 
 def detect_surface(venue: str) -> Optional[str]:
@@ -65,3 +72,111 @@ def is_cancelled_status(status: Optional[str]) -> bool:
         return False
     lowered = status.lower()
     return any(marker in lowered for marker in _CANCELLED_MARKERS)
+
+
+def _parse_headline(text: str) -> Optional[Dict]:
+    """
+    Parses a headline like "Samstag, 24.10.2026 - 17:00 Uhr | Bezirksliga".
+
+    :param text: The headline text.
+    :return: A dict with local_dt and competition, or None if it cannot be parsed.
+    """
+    date_part, _, rest = text.partition(" - ")
+    parts = [part.strip() for part in rest.split(" | ")]
+    try:
+        date_str = date_part.split(", ")[1].strip()
+        time_str = parts[0].replace("Uhr", "").strip()
+        naive_dt = datetime.strptime(f"{date_str} {time_str}", "%d.%m.%Y %H:%M")
+    except (IndexError, ValueError):
+        return None
+    competition = parts[-1] if len(parts) > 1 and parts[-1] else None
+    return {"local_dt": naive_dt.replace(tzinfo=_LOCAL_TZ), "competition": competition}
+
+
+def _club_side(cell) -> Optional[Dict[str, Optional[str]]]:
+    """
+    Reads name and team id of one club cell of a game row.
+
+    :param cell: The td.column-club tag.
+    :return: A dict with name and team_id, or None if the cell has no name.
+    """
+    name_tag = cell.find(class_="club-name")
+    if not name_tag:
+        return None
+    team_id = None
+    link = cell.find("a", href=True)
+    if link:
+        match = _TEAM_ID.search(link["href"])
+        team_id = match.group(1) if match else None
+    return {"name": name_tag.get_text(strip=True), "team_id": team_id}
+
+
+def parse_schedule_html(html: str, team_id: str) -> List[ScheduleGame]:
+    """
+    Parses the fussball.de team matchplan (with venues) into schedule games.
+
+    :param html: The HTML of ajax.team.matchplan with show-venues/true.
+    :param team_id: The id of the requested team.
+    :return: The games in the order fussball.de lists them.
+    """
+    soup = _make_soup(html)
+    games: List[ScheduleGame] = []
+    headline: Optional[Dict] = None
+    last_game: Optional[ScheduleGame] = None
+
+    for row in soup.find_all("tr"):
+        classes = row.get("class", [])
+        if "row-headline" in classes:
+            headline = _parse_headline(row.get_text(" ", strip=True))
+            if headline is None:
+                logger.warning(f"Could not parse schedule headline: '{row.get_text(strip=True)}'")
+            last_game = None
+            continue
+
+        if "row-venue" in classes:
+            venue = row.get_text(" ", strip=True)
+            if last_game is not None and venue:
+                last_game.venue = venue
+                last_game.surface = detect_surface(venue)
+                for key, value in split_venue(venue).items():
+                    setattr(last_game, key, value)
+            last_game = None
+            continue
+
+        score_cell = row.find("td", class_="column-score")
+        if not score_cell or headline is None:
+            continue
+
+        club_cells = row.find_all("td", class_="column-club")
+        sides = [_club_side(cell) for cell in club_cells]
+        link = score_cell.find("a", href=True)
+        if len(sides) != 2 or None in sides or not link:
+            logger.warning(f"Could not parse schedule game row for team {team_id}. Skipping.")
+            continue
+
+        home, away = sides
+        is_home = home["team_id"] == team_id
+        status_tag = score_cell.find("span", class_="info-text")
+        status = status_tag.get_text(strip=True) if status_tag else None
+        local_dt = headline["local_dt"]
+
+        last_game = ScheduleGame(
+            id=link["href"].strip("/").split("/")[-1],
+            team_id=team_id,
+            is_home=is_home,
+            home_team=home["name"],
+            away_team=away["name"],
+            home_team_id=home["team_id"],
+            away_team_id=away["team_id"],
+            opponent=away["name"] if is_home else home["name"],
+            title=f"{home['name']} – {away['name']}",
+            date=local_dt.strftime("%Y-%m-%d"),
+            time=local_dt.strftime("%H:%M"),
+            datetime_utc=local_dt.astimezone(ZoneInfo("UTC")),
+            competition=headline["competition"],
+            status=status or None,
+            is_cancelled=is_cancelled_status(status),
+        )
+        games.append(last_game)
+
+    return games
